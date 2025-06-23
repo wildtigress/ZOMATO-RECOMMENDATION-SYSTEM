@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import cosine_similarity
 import re
-import nltk
-from nltk.corpus import stopwords
-import os # Added for NLTK data path handling
+# Removed all NLTK imports and related code.
 
 # Configure page with professional color scheme
 st.set_page_config(
@@ -21,7 +19,7 @@ st.markdown("""
 <style>
     /* Define color palette */
     :root {
-        --primary: #FF4B4B;  /* Zomato's brand red */
+        --primary: #FF4B4B;    /* Zomato's brand red */
         --secondary: #E03E3E; /* Slightly darker red for accents and button hovers */
         --background-main: #FDFCEF; /* Main app background - very light beige */
         --background-sidebar: #F5F5DC; /* Sidebar background - light cream */
@@ -30,7 +28,7 @@ st.markdown("""
         --text-dark: #1A1A1A; /* Very dark grey/almost black for most text */
         --text-light: #FFFFFF; /* White text, for elements on dark backgrounds */
         --light-text: #4A4A4A; /* Medium grey for secondary details (e.g., votes count) */
-        --border-light: #CCCCCC;   /* Light grey for borders, visible */
+        --border-light: #CCCCCC;     /* Light grey for borders, visible */
     }
     
     /* Overall App Styling */
@@ -49,14 +47,16 @@ st.markdown("""
         background-color: var(--background-sidebar); /* Light cream sidebar background */
     }
     .st-emotion-cache-1wqx_jl .st-emotion-cache-16txtg3 { /* Targets the inner sidebar content div */
-        color: var(--text-dark); /* Ensure sidebar general text is dark and visible */
-    }
-    /* FIX: Labels for sliders and selectbox in sidebar to appear white */
-    .stSidebar .stSlider > label,
-    .stSidebar .stSelectbox > label {
-        color: var(--text-light) !important; /* White text for sidebar labels */
+        color: var(--text-dark); /* Ensure sidebar general text is dark and visible (e.g. for default text not otherwise styled) */
     }
 
+    /* FIX: Make specific sidebar texts white for visibility on the light cream background */
+    .stSidebar div.stMarkdown p, /* For "Adjust your search criteria:" and other markdown in sidebar */
+    .stSidebar .stSlider > label, /* For slider labels like "Minimum Rating" */
+    .stSidebar .stSelectbox > label { /* For selectbox labels like "Filter by Cuisine" */
+        color: var(--text-light) !important; /* Forces these specific texts to be white */
+    }
+    
     /* Sliders styling */
     .stSlider > div > div > div:nth-child(2) { /* Slider track (unfilled part) */
         background: var(--secondary) !important;
@@ -193,7 +193,7 @@ st.markdown("""
 
 # Cuisine to emoji mapping (expanded for better coverage)
 CUISINE_EMOJIS = {
-    'american': '🍔', 'bbq': '🍖', 'italian': '🍝', 'indian': '🍛', 'chinese': '�',
+    'american': '🍔', 'bbq': '🍖', 'italian': '🍝', 'indian': '🍛', 'chinese': '🍜',
     'japanese': '🍣', 'mexican': '🌮', 'thai': '🍜', 'mediterranean': '🥙', 'french': '🥐',
     'desserts': '🍰', 'cafe': '☕', 'bakery': '🥖', 'pizza': '🍕', 'burger': '🍔',
     'seafood': '🍤', 'sushi': '🍣', 'korean': '🍲', 'lebanese': '🧆', 'finger food': '🍟',
@@ -204,57 +204,98 @@ CUISINE_EMOJIS = {
     'arabian': '🧆', 'asian': '🍚', 'breakfast': '🍳', 'continental': '🍽️', 'european': '🇫🇷',
     'grill': '🥩', 'kebab': '🍖', 'kerala': '🌶️', 'malaysian': '🍜', 'mughlai': '🍛',
     'pakistani': '🍛', 'rajasthani': '🌶️', 'sandwich': '🥪', 'sichuan': '🌶️', 'sweet': '🍬',
-    'turkish': '🥙', 'vietnamese': '🍜', 'wraps': '🌯'
+    'turkish': '🥙', 'vietnamese': '🍜', 'wraps': '🌯', 'general asian': '🍜',
+    'mediterranean/middle eastern': '🥙',
+    'desserts/bakery': '🍰'
 }
 
-# Define a writable NLTK data path for cloud deployments
-nltk_data_path = os.path.join(os.path.expanduser("~"), "nltk_data")
-if not os.path.exists(nltk_data_path):
-    os.makedirs(nltk_data_path)
-nltk.data.path.append(nltk_data_path)
+# --- Function for Cuisine Standardization ---
+def standardize_cuisine_name(cuisine_string):
+    if pd.isna(cuisine_string):
+        return []
+    
+    raw_cuisines = [c.strip().lower() for c in cuisine_string.split(',')]
+    standardized_list = []
 
-# Download NLTK data silently and only once (check if already downloaded)
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords', download_dir=nltk_data_path, quiet=True)
+    for cuisine in raw_cuisines:
+        if 'indian' in cuisine:
+            standardized_list.append('indian')
+        elif 'american' in cuisine:
+            standardized_list.append('american')
+        elif 'chinese' in cuisine:
+            standardized_list.append('chinese')
+        elif 'italian' in cuisine:
+            standardized_list.append('italian')
+        elif 'fast food' in cuisine or 'quick bites' in cuisine:
+            standardized_list.append('fast food')
+        elif 'cafe' in cuisine or 'coffee' in cuisine:
+            standardized_list.append('cafe')
+        elif 'bakery' in cuisine or 'desserts' in cuisine or 'ice cream' in cuisine or 'sweet' in cuisine:
+            standardized_list.append('desserts/bakery')
+        elif 'asian' in cuisine and 'indian' not in cuisine and 'chinese' not in cuisine and 'japanese' not in cuisine and 'thai' not in cuisine and 'korean' not in cuisine and 'vietnamese' not in cuisine:
+            standardized_list.append('general asian')
+        elif 'japanese' in cuisine or 'sushi' in cuisine:
+            standardized_list.append('japanese')
+        elif 'thai' in cuisine:
+            standardized_list.append('thai')
+        elif 'korean' in cuisine:
+            standardized_list.append('korean')
+        elif 'mediterranean' in cuisine or 'lebanese' in cuisine or 'arabian' in cuisine or 'turkish' in cuisine:
+            standardized_list.append('mediterranean/middle eastern')
+        elif 'mexican' in cuisine:
+            standardized_list.append('mexican')
+        elif 'european' in cuisine or 'continental' in cuisine or 'french' in cuisine or 'german' in cuisine:
+            standardized_list.append('european')
+        elif 'seafood' in cuisine:
+            standardized_list.append('seafood')
+        elif 'pizza' in cuisine:
+            standardized_list.append('pizza')
+        elif 'burger' in cuisine:
+            standardized_list.append('burger')
+        elif 'street food' in cuisine:
+            standardized_list.append('street food')
+        else:
+            standardized_list.append(cuisine)
+            
+    return sorted(list(set(standardized_list)))
 
 @st.cache_data
 def load_data():
     """
     Loads and preprocesses the Zomato dataset.
-    Includes cleaning cuisine text, removing stopwords, and creating
-    separate columns for clustering (pure text) and display (with emojis).
+    Includes cleaning cuisine text for TF-IDF, standardizing cuisines for filtering,
+    and creating separate columns for display (with emojis).
     """
     try:
         df = pd.read_csv('zomato.csv', encoding='latin-1')
         df = df[['Restaurant Name', 'Cuisines', 'Aggregate rating', 'Votes']].dropna()
         df.columns = ['name', 'cuisines', 'rating', 'votes']
         
-        stop_words = set(stopwords.words('english'))
-        
-        # Function to clean text for clustering (removes non-alphabetic, lowercases, removes stopwords)
-        def clean_for_clustering(text):
+        # Function to clean text for TF-IDF (removes non-alphabetic, lowercases)
+        # Removed stopwords due to NLTK dependency issues.
+        def clean_text_for_tfidf(text):
             text = re.sub(r'[^a-zA-Z,\s]', '', str(text).lower())
-            words = [word.strip() for word in text.split(',') if word.strip() and word.strip() not in stop_words]
-            return ', '.join(words)
-
+            words = [word.strip() for word in text.split(',') if word.strip()]
+            return ' '.join(words) # Join words with space for TF-IDF
+        
         # Function to add emojis to original cuisine names for display
         def add_emojis_to_cuisines(cuisine_string):
             original_cuisines = [c.strip() for c in cuisine_string.split(',') if c.strip()]
             emoji_cuisines_list = []
             for oc in original_cuisines:
                 best_match_emoji = '🍴' # Default emoji if no specific match
-                # Iterate through emoji keys to find a match (case-insensitive substring)
                 for key, emoji in CUISINE_EMOJIS.items():
                     if key in oc.lower(): 
                         best_match_emoji = emoji
-                        break # Take the first matching emoji
+                        break 
                 emoji_cuisines_list.append(f"{best_match_emoji} {oc}")
             return ', '.join(emoji_cuisines_list)
                 
-        df['cleaned_for_clustering'] = df['cuisines'].apply(clean_for_clustering)
+        df['cleaned_for_tfidf'] = df['cuisines'].apply(clean_text_for_tfidf)
         df['display_cuisines'] = df['cuisines'].apply(add_emojis_to_cuisines)
+        
+        # Apply the standardization
+        df['standardized_cuisines'] = df['cuisines'].apply(standardize_cuisine_name)
 
         return df
     except FileNotFoundError:
@@ -264,25 +305,22 @@ def load_data():
         st.error(f"An unexpected error occurred while loading or processing data: {str(e)}")
         return pd.DataFrame() # Return empty DataFrame on any other error
 
-@st.cache_data
-def cluster_restaurants(df):
+@st.cache_resource # Use st.cache_resource for objects like TfidfVectorizer
+def get_tfidf_vectorizer(df):
     """
-    Performs TF-IDF vectorization and K-Means clustering on cleaned cuisine data.
+    Initializes and fits a TF-IDF Vectorizer.
     """
     if df.empty:
-        return df # If DataFrame is empty, return it as is
+        return None, None
     
-    tfidf = TfidfVectorizer(max_features=1000)
-    features = tfidf.fit_transform(df['cleaned_for_clustering']) # Use the text specifically cleaned for clustering
+    tfidf_vectorizer = TfidfVectorizer(max_features=1000)
+    tfidf_features = tfidf_vectorizer.fit_transform(df['cleaned_for_tfidf'])
     
-    # Use n_init for robust KMeans initialization (avoids warning in newer scikit-learn versions)
-    kmeans = KMeans(n_clusters=15, random_state=42, n_init=10) 
-    df['cluster'] = kmeans.fit_predict(features)
-    return df
+    return tfidf_vectorizer, tfidf_features
 
 def main():
     st.title("🍽️ Zomato AI Restaurant Recommender")
-    st.markdown("### Discover restaurants with similar cuisines using machine learning clustering")
+    st.markdown("### Discover restaurants with similar cuisines using content-based recommendations")
     
     # Load and process data
     df = load_data()
@@ -290,128 +328,137 @@ def main():
         st.warning("Application cannot run without data. Please ensure 'zomato.csv' is correctly placed and accessible.")
         return # Stop execution if data loading failed
     
-    df = cluster_restaurants(df)
-    
+    # Get TF-IDF vectorizer and features
+    tfidf_vectorizer, tfidf_features = get_tfidf_vectorizer(df)
+    if tfidf_vectorizer is None:
+        st.error("Could not initialize TF-IDF vectorizer. Cannot provide recommendations.")
+        return
+
     # Sidebar filters
     with st.sidebar:
         st.header("🔍 Filters")
-        # FIX: Sidebar general text (like "Adjust your search criteria:") is now dark by default.
-        st.markdown("Adjust your search criteria:")
+        # This markdown text's color will now be white
+        st.markdown("Adjust your search criteria:") 
         
         min_rating = st.slider(
-            "⭐ Minimum Rating", # FIX: Label in sidebar is now white
+            "⭐ Minimum Rating", # This label's color will now be white
             1.0, 5.0, 3.5, 0.1,
             help="Filter by minimum restaurant rating. Only restaurants with this rating or higher will be shown."
         )
         
         min_votes = st.slider(
-            "🗳️ Minimum Votes", # FIX: Label in sidebar is now white
+            "🗳️ Minimum Votes", # This label's color will now be white
             0, 5000, 100, 50,
             help="Filter by minimum number of votes. Only restaurants with this many votes or more will be included."
         )
         
-        # Get unique cuisines from the original 'cuisines' column for the selectbox
-        all_cuisines = sorted(df['cuisines'].str.split(', ').explode().unique().tolist())
+        # Get unique cuisines from the new 'standardized_cuisines' column for the selectbox
+        all_cuisines_for_selectbox = sorted(df['standardized_cuisines'].explode().unique().tolist())
         selected_cuisine = st.selectbox(
-            "🍽️ Filter by Cuisine", # FIX: Label in sidebar is now white
-            ['All Cuisines'] + all_cuisines, # Add 'All Cuisines' option
-            help="Select a specific cuisine type to narrow down your search."
+            "🍽️ Filter by Cuisine (Standardized)", # This label's color will now be white
+            ['All Cuisines'] + all_cuisines_for_selectbox, 
+            help="Select a specific standardized cuisine type to narrow down your search."
         )
     
-    # Apply filters to the DataFrame
+    # Apply initial filters to the DataFrame
     filtered_df = df[(df['rating'] >= min_rating) & (df['votes'] >= min_votes)]
     if selected_cuisine != 'All Cuisines':
-        # Ensure 'cuisines' column contains the selected cuisine (case-insensitive)
-        filtered_df = filtered_df[filtered_df['cuisines'].str.contains(selected_cuisine, case=False, na=False)]
+        filtered_df = filtered_df[filtered_df['standardized_cuisines'].apply(lambda x: selected_cuisine in x)]
     
     # Main content tabs
     tab1, tab2 = st.tabs(["🔍 Explore Restaurants", "🤖 Smart Recommendations"])
     
     with tab1:
         st.subheader("🍽️ Restaurant Explorer")
-        # FIX: st.info messages now appear in black text on beige background
         if filtered_df.empty:
             st.info("No restaurants found with the selected filters. Please adjust your criteria in the sidebar.")
         else:
             # Display filtered restaurants in a DataFrame
             st.dataframe(
                 filtered_df[['name', 'display_cuisines', 'rating', 'votes']].sort_values(['rating', 'votes'], ascending=False),
-                height=500, # Set a fixed height for the dataframe
-                use_container_width=True, # Make it responsive to container width
-                hide_index=True, # Hide default pandas index for cleaner look
-                column_config={ # Configure column display for better readability
+                height=500, 
+                use_container_width=True, 
+                hide_index=True, 
+                column_config={ 
                     "name": "Restaurant",
-                    "display_cuisines": "Cuisines", # Use the emoji-enhanced cuisines for display
-                    "rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐"), # Format rating with a star
-                    "votes": st.column_config.NumberColumn("Votes", format="🗳️ %d") # Format votes with an emoji
+                    "display_cuisines": "Cuisines", 
+                    "rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐"), 
+                    "votes": st.column_config.NumberColumn("Votes", format="🗳️ %d") 
                 }
             )
             
-            # Separator for visualizations
             st.markdown("---") 
             
-            # Display visualizations in two columns
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📊 Rating Distribution")
-                fig1, ax1 = plt.subplots(figsize=(10, 4)) # Set explicit figure size
-                # Use hex code for reliability in Matplotlib (maps to var(--primary))
+                fig1, ax1 = plt.subplots(figsize=(10, 4)) 
                 filtered_df['rating'].hist(bins=20, ax=ax1, color='#FF4B4B', edgecolor='white') 
                 ax1.set_xlabel("Rating")
                 ax1.set_ylabel("Number of Restaurants")
-                plt.tight_layout() # Adjust layout to prevent labels overlapping
+                plt.tight_layout() 
                 st.pyplot(fig1)
             
             with col2:
                 st.subheader("📈 Votes vs Rating")
-                fig2, ax2 = plt.subplots(figsize=(10, 4)) # Set explicit figure size
-                # Use hex code for reliability (maps to var(--secondary))
-                ax2.scatter(filtered_df['rating'], filtered_df['votes'], alpha=0.7, color="#FF9A9A", # Changed color back to secondary for consistency
-                            s=filtered_df['votes']/10 + 20) # Size points by votes for visual impact
+                fig2, ax2 = plt.subplots(figsize=(10, 4)) 
+                ax2.scatter(filtered_df['rating'], filtered_df['votes'], alpha=0.7, color="#FF9A9A", 
+                                     s=filtered_df['votes']/10 + 20) 
                 ax2.set_xlabel("Rating")
                 ax2.set_ylabel("Votes")
-                plt.tight_layout() # Adjust layout
+                plt.tight_layout() 
                 st.pyplot(fig2)
     
     with tab2:
         st.subheader("🔍 Find Similar Restaurants")
-        # FIX: st.info messages now appear in black text on beige background
         if filtered_df.empty:
             st.info("No restaurants match your current filters. Please adjust the filters in the sidebar to enable recommendations.")
         else:
-            # Selectbox for choosing a restaurant for recommendations
-            # FIX: "Select a restaurant you like to find similar ones:" is now black
             restaurant_name = st.selectbox(
                 "Select a restaurant you like to find similar ones:",
-                filtered_df['name'].unique(), # Populate with unique restaurant names from filtered data
-                key="restaurant_select" # Unique key for this widget
+                filtered_df['name'].unique(), 
+                key="restaurant_select" 
             )
             
-            if restaurant_name: # Only proceed if a restaurant is selected
-                # Check if the selected restaurant is still in the filtered_df (filters might have changed)
+            if restaurant_name: 
+                # Ensure the selected restaurant is still in the filtered_df
                 if restaurant_name not in filtered_df['name'].values:
-                    # FIX: st.warning messages now appear in black text on beige background
                     st.warning("The selected restaurant is no longer available with current filters. Please choose another.")
                 else:
-                    # Get the cluster of the selected restaurant
-                    cluster = filtered_df[filtered_df['name'] == restaurant_name]['cluster'].values[0]
-                    # Find other restaurants in the same cluster, excluding the selected one itself
-                    similar_restaurants = filtered_df[
-                        (filtered_df['cluster'] == cluster) & 
-                        (filtered_df['name'] != restaurant_name)
-                    ]
+                    # Get the index of the selected restaurant in the original full DataFrame
+                    # This is important because tfidf_features corresponds to the original df indices
+                    selected_restaurant_idx_original = df[df['name'] == restaurant_name].index[0]
                     
-                    if similar_restaurants.empty:
-                        # FIX: st.info messages now appear in black text on beige background
-                        st.info(f"No other similar restaurants found in the same cluster for '{restaurant_name}' with the current filters.")
+                    # Get the TF-IDF vector for the selected restaurant
+                    selected_restaurant_vector = tfidf_features[selected_restaurant_idx_original]
+                    
+                    # Calculate cosine similarity with all other restaurants in the *filtered* DataFrame
+                    # We need to map the filtered_df indices back to the original df indices to get correct TF-IDF vectors
+                    filtered_indices_original = filtered_df.index
+                    
+                    # Compute similarity only among the filtered restaurants
+                    similarities = cosine_similarity(selected_restaurant_vector, tfidf_features[filtered_indices_original]).flatten()
+                    
+                    # Create a temporary DataFrame with similarities, linking back to filtered_df
+                    similarity_df = pd.DataFrame({
+                        'name': filtered_df['name'].values,
+                        'similarity': similarities
+                    }, index=filtered_df.index) # Keep original indices for joining
+
+                    # Sort by similarity, exclude the selected restaurant itself
+                    similar_restaurants_sorted = similarity_df[similarity_df['name'] != restaurant_name].sort_values(by='similarity', ascending=False)
+                    
+                    # Get the top 10 most similar restaurants based on cosine similarity
+                    # Join with the original filtered_df to get all details like cuisines, rating, votes
+                    top_similar_restaurants = filtered_df.loc[similar_restaurants_sorted.head(10).index]
+                    
+                    if top_similar_restaurants.empty:
+                        st.info(f"No other similar restaurants found for '{restaurant_name}' with the current filters.")
                     else:
-                        # Display total recommendations found
-                        st.metric("🍽️ Total Recommendations Found", len(similar_restaurants))
+                        st.metric("🍽️ Total Recommendations Found", len(top_similar_restaurants))
                         
-                        # Display top 10 recommendations in styled cards
                         st.subheader(f"✨ Top Picks Similar to {restaurant_name}:")
-                        # Sort by rating and votes for the best recommendations
-                        for _, row in similar_restaurants.sort_values(['rating', 'votes'], ascending=False).head(10).iterrows():
+                        for _, row in top_similar_restaurants.iterrows():
                             with st.container():
                                 st.markdown(f"""
                                 <div class="restaurant-card">
